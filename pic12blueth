@@ -1,0 +1,169 @@
+;==================================================================================
+;Программа управления детской игрушкой паровозом по блютузу.
+;Тактирование от внутреннего генератора 4 МГц.
+;Скорость 9600 bod.
+;1 стартовый бит,
+;8 бит данные,
+;
+;==================================================================================
+			LIST			P=PIC12F629
+			__CONFIG		H'3184'
+#include <pic12.inc>
+;==================================================================================			
+cblock		20h
+;==================================================================================
+delayCounterH
+delayCounterL
+delayCounter
+buffer
+buffBitCount
+tempReg
+;==================================================================================
+endc
+;==================================================================================
+Transmission 	equ				3
+HighHelf	equ				.15	;Старшая половина
+LowHelf		equ				.13	;Младшая половина
+
+			org	0
+			goto 	Start
+
+			org 	4
+
+Delay
+			movwf	delayCounter
+			decfsz	delayCounter, F
+			goto 	$-1
+			decfsz	delayCounterH, F
+			goto	Delay
+			return
+			
+WaitingTransmission	
+;Ожидание передачи
+			btfsc	PORTIO, Transmission
+			goto	WaitingTransmission
+			clrw
+			movwf	buffer
+			return
+			
+ReadBit
+;19 января 2024
+;Подпрограмма чтения бита.
+;Копируем PORTIO в аккумулятор, из аккумулятора копируем в tempReg.
+;Сбрасываем все биты в ноль, кроме 3-го.
+			movlw	08h
+			andwf	PORTIO, W
+			return
+			
+WriteToBuffer
+;Запись бита в буффер.
+			movwf	tempReg
+			swapf	tempReg, W
+			iorwf	buffer, F
+			return
+													
+ReceivingByte
+;Пауза в полбита
+			movlw	.1
+			movwf	delayCounterH
+			movlw	HighHelf
+			call	Delay
+			
+;Читаем бит.
+			call	ReadBit
+			call	WriteToBuffer
+			
+;Бит принят. Ждём до конца бита.
+			movlw	.1
+			movwf	delayCounterH
+			movlw	LowHelf
+			call	Delay
+			
+;Сдвигаем вправо единицу в buffBitCount и данные в буффере.
+			rrf	buffBitCount, F
+			btfsc	STATUS, C
+			return
+			rrf	buffer, F
+			goto	ReceivingByte
+
+IsGoFront
+;
+			movwf	tempReg
+			movlw	66h
+			subwf	tempReg, W	
+			return
+			
+IsGoRevers
+;
+			movwf	tempReg
+			movlw	72h
+			subwf	tempReg,  W
+			return
+									
+TransmissionByte
+			return
+								
+Start
+			bsf 	STATUS, 5
+			movlw	08h
+			movwf	TRISIO
+			bcf	STATUS,	5
+			
+;Тестовая часть.
+;Для проверки временных интервалов.
+;Во время простоя линии передачи на PORTIO 0 выставляем логическую 1.
+;Как только началась передача (старт бит) на PORTIO 0 ставим 0.
+;Среда, 17 января 2024 г.
+;Итак...
+;Опытным путём установлено для отрезка времени в 105 мкс. требуется 39 тактов, а не 104.
+;105 мкс - время на один бит.
+
+;Побежали!!!
+Run
+			call	WaitingTransmission
+			
+;Начало передачи
+;Прием стартового бита
+			movlw	.1
+			movwf	delayCounterH
+			movlw	.37
+			call 	Delay
+			
+;Принимаем 8 бит и записываем в буффер.
+			bcf	STATUS, C
+			movlw	.128		;Помещаем 1 в счётчик.
+			movwf	buffBitCount
+			call	ReceivingByte
+			
+;Конец передачи.
+;Проверяем что в буффере.
+			movf	buffer, W
+			call 	IsGoFront
+			btfsc	STATUS, Z
+			goto  	GoFront
+			movf	buffer, W
+			call 	IsGoRevers
+			btfsc	STATUS, Z
+			goto	GoRevers
+			goto	Run
+GoFront
+;
+			movlw	.1
+			movwf	delayCounterH
+			movlw	.37
+			call 	Delay
+			movlw	.2
+			movwf	PORTIO
+			goto	Run
+GoRevers
+;
+			movlw	.1
+			movwf	delayCounterH
+			movlw	.37
+			call 	Delay
+			movlw	.1
+			movwf	PORTIO
+			goto	Run
+			nop
+			goto $-1
+			end
